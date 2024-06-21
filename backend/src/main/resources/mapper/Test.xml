@@ -1,0 +1,1028 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.ktds.orchestra.mapper.TestMapper">
+
+    <select id="getProgressList" resultType="kr.co.ktds.orchestra.dto.common.ProgressList">
+        <![CDATA[
+        -- getProgressList (테스트 누적 진척 - 상단 그리드)
+        -- 테스트 단계의 모든 task 기준
+        with params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id,
+               max(case sr.set_name when 'status.done' then sr.set_value end) status_done_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('status.cancel', true),
+                        ('status.done', true),
+                        ('tracker_id.test', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        )
+        select row_number() over() as no
+             , test_dgr as trk_nm
+             , module_name as mdl_nm
+             , name as assigned
+             -- 누적
+             , acc_plan, acc_per, acc_prog, acc_dly
+             , coalesce(round((acc_per::numeric/nullif(acc_plan,0)::numeric *100), 1), 0) as acc_cmp_rate
+             -- 주간
+             , week_plan, week_per, week_prog, week_dly
+             , coalesce(round((week_per::numeric/nullif(week_plan,0)::numeric*100), 1), 0) as week_cmp_rate
+             , test_remain as all_res, test_total as all_total
+          from (
+                select test_dgr, module_name, name
+                     , count(acc_plan) as acc_plan   -- 누적계획
+                     , count(acc_per) as acc_per     -- 누적실적
+                     , count(acc_prog) as acc_prog   -- 누적진행중
+                     , count(acc_dly) as acc_dly     -- 누적지연
+                     , count(week_plan) as week_plan -- 주간계획
+                     , count(week_per) as week_per   -- 주간실적
+                     , count(week_prog) as week_prog -- 주간진행중
+                     , count(week_dly) as week_dly   -- 주간지연
+                     , count(test_remain) as test_remain -- 테스트단계잔여
+                     , count(test_total) as test_total   -- 테스트단계전체
+                from (
+                      select t.name as test_dgr
+                           , ic.name as module_name
+                           , u.firstname as name
+                           , i.id
+                           , case when i.start_date <= con.date_acc then i.id end as acc_plan-- 누적계획
+                           , case when i.start_date <= con.date_acc
+                                   and date_trunc('day', i.closed_on) <= con.date_acc
+                                   and iss.is_closed
+                                  then i.id end as acc_per -- 누적실적
+                           , case when i.start_date <= con.date_acc
+                                   and (i.closed_on is null
+                                        or date_trunc('day', i.closed_on) > con.date_acc
+                                        or iss.is_closed = false)
+                                   and i.due_date >= con.date_acc
+                                  then i.id end as acc_prog -- 누적진행중
+                           , case when i.start_date <= con.date_acc
+                                   and (i.closed_on is null
+                                        or date_trunc('day', i.closed_on) > con.date_acc
+                                        or iss.is_closed = false)
+                                   and i.due_date < con.date_acc
+                                  then i.id end as acc_dly -- 누적지연
+                           , case when i.start_date <= con.date_to
+                                   and i.due_date >= con.date_from
+                                  then i.id end as week_plan -- 주간계획
+                           , case when i.start_date <= con.date_to
+                                   and i.due_date >= con.date_from
+                                   and date_trunc('day', i.closed_on) <= con.date_to
+                                   and iss.is_closed = true
+                                  then i.id end as week_per -- 주간실적
+                           , case when i.start_date <= con.date_to
+                                   and i.due_date >= con.date_from
+                                   and (i.closed_on is null
+                                        or date_trunc('day', i.closed_on) > con.date_to
+                                        or iss.is_closed = false)
+                                   and i.due_date >= con.date_to
+                                  then i.id end as week_prog -- 주간진행중
+                           , case when i.start_date <= con.date_to
+                                   and i.due_date >= con.date_from
+                                   and (i.closed_on is null
+                                        or date_trunc('day', i.closed_on) > con.date_to
+                                        or iss.is_closed = false)
+                                   and i.due_date < con.date_to
+                                  then i.id end as week_dly -- 주간지연
+                           , case when not (i.closed_on is not null and iss.is_closed)
+                                  then i.id end as test_remain -- 테스트단계잔여
+                           , i.id as test_total -- 테스트단계전체
+                           , i.status_id
+                           , i.start_date
+                           , i.due_date
+                           , i.closed_on
+                           , iss.is_closed
+                        from issues i
+                       cross join
+                             (select to_date(#{startDate}, 'YYYY-MM-DD') date_from,
+                                     to_date(#{endDate}, 'YYYY-MM-DD') date_to,
+                                     to_date(#{accDate}, 'YYYY-MM-DD') date_acc) con
+                       inner join trackers t on t.id = i.tracker_id
+                        left outer join issue_categories ic on i.category_id = ic.id
+                        left outer join issue_statuses iss on i.status_id = iss.id
+                        left outer join users u on i.assigned_to_id = u.id
+                       where 1=1
+                         and (i.project_id, i.tracker_id)
+                          in (select project_id::integer, regexp_split_to_table(tracker_id, ',')::integer from params)
+                         and i.status_id != (select status_cancel_id::integer from params)
+                         -- 검색조건에 따라 다름(2가지)
+                         and i.assigned_to_id is not null
+                         and i.category_id is not null
+        ]]>
+        <if test="testDgr != null and testDgr != ''">
+            <![CDATA[
+                            and i.tracker_id = #{testDgr}::integer
+        ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                <![CDATA[
+                    and ic.name like '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                <![CDATA[
+                    and u.firstname like '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                <![CDATA[
+                    and (ic.name like '%'||#{keyword}||'%'
+                         or u.firstname like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        <![CDATA[
+                        ) base
+                group by test_dgr, module_name, name
+            ) sum
+            where 1=1
+            order by test_dgr asc, mdl_nm asc, assigned asc
+        ]]>
+    </select>
+
+    <select id="getResultList" resultType="kr.co.ktds.orchestra.dto.test.TestResultList">
+        <![CDATA[
+        -- getResultList(테스트 누적 결과 - 하단 그리드)
+        with params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id,
+               max(case sr.set_name when 'status.done' then sr.set_value end) status_done_id,
+               max(case sr.set_name when 'custom_field_id.test_result' then sr.set_value end) test_result
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.test', true),
+                        ('status.cancel', true),
+                        ('status.done', true),
+                        ('custom_field_id.test_result', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        ),
+        base as (
+        select trackers.name as tracker
+                , issue_categories.name as category
+                , u.firstname as username
+                , count(i.id) as total
+                , count(case when ee.name='PASS' then i.id end) as pass
+                , count(case when ee.name='FAIL' then i.id end) as fail
+                , count(case when ee.name='BLOCK' then i.id end) as block
+                , i.start_date
+                , i.due_date
+                , i.closed_on
+          from issues i
+          left outer join (select v.customized_id, e.name
+                  from custom_fields f
+                  join custom_values v on f.id = v.custom_field_id
+                  join custom_field_enumerations e on f.id = e.custom_field_id
+                    and v.value = cast(e.id as text)
+                 where f.id in (select test_result::integer from params)) ee on i.id = ee.customized_id
+          join trackers on i.tracker_id = trackers.id
+          join issue_categories on i.category_id = issue_categories.id
+          join users u on i.assigned_to_id = u.id
+          where 1=1
+            -- 파라미터 받을 내용
+            and i.project_id = (select project_id from params)         -- 테스트 단계(version)
+            and i.tracker_id
+             in (select regexp_split_to_table(tracker_id, ',')::integer from params)
+            and i.assigned_to_id is not null
+			and i.category_id is not null
+			and i.status_id not in (select regexp_split_to_table(status_cancel_id, ',')::integer from params)
+         ]]>
+        <if test="testDgr != null and testDgr != ''">
+            <![CDATA[
+                    and i.tracker_id = #{testDgr}::integer
+                ]]>
+        </if>
+        <![CDATA[
+         group by trackers.name, issue_categories.name, username, i.start_date, i.due_date, i.closed_on
+        )
+        select (row_number() over()) as no , a.*
+          from
+          (select tracker as trk_nm, category as mdl_nm, username as assigned
+                -- 누적
+                , coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then total end),0) as acc_total
+                , coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD')  then pass end),0) as acc_pass
+                , coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then fail end),0) as acc_fail
+                , coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then block end),0) as acc_block
+                , case when coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then pass end),0) = 0 then 0
+                     else round(coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then pass end),1)::numeric
+                          /coalesce(sum(case when start_date <= to_date(#{accDate}, 'YYYY-MM-DD') then total end),1)::numeric * 100,1) end as acc_pass_rate
+                -- 주간
+                , coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then total end),0) as week_total
+                , coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then pass end),0) as week_pass
+                , coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then fail end),0) as week_fail
+                , coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then block end),0) as week_block
+                , case when coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then pass end),0) = 0 then 0
+                     else round(coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then pass end),0)::numeric
+                            /coalesce(sum(case when due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and start_date <= to_date(#{endDate}, 'YYYY-MM-DD') then total end),1)::numeric*100,1) end as week_pass_rate
+          from base
+         where 1=1
+        -- 검색조건에 따라 다름(3가지)
+      ]]>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                    <![CDATA[
+                    and category like '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                    <![CDATA[
+                    and username like '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                    <![CDATA[
+                    and (category like '%'||#{keyword}||'%'
+                         or username like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        <![CDATA[
+         group by tracker, category, username
+         order by tracker, category, username
+        ) a
+       where a.acc_total != 0
+      ]]>
+    </select>
+
+    <select id="getCompleteStatus" resultType="kr.co.ktds.orchestra.dto.common.CompleteStatus">
+        <![CDATA[
+        -- getCompleteStatus (테스트 누적 완료 현황)
+        with params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value--regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.test', true),
+                        ('status.cancel', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        )
+       select status
+             , cnt
+             , total
+             , round(cnt/total::numeric * 100, 1) as ratio
+             , ids as id
+          from
+               (select s.name status
+                     , count(s.name) cnt
+                     , sum(count(s.name)) over () total
+                     , string_agg(i.id::varchar, ',' order by i.id) ids
+                  from issues i
+                  left outer join issue_statuses s on i.status_id = s.id
+                 where 1=1
+                   and (i.project_id, i.tracker_id)
+                   in (select project_id, regexp_split_to_table(tracker_id, ',')::integer from params)
+                   and i.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+                   and i.status_id != (select status_cancel_id::integer from params)
+                   and i.assigned_to_id is not null
+                   and i.category_id is not null
+                   ]]>
+        <if test="testDgr != null and testDgr != ''">
+            <![CDATA[
+                and i.tracker_id = #{testDgr}::integer
+            ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                    <![CDATA[
+                            and i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                    <![CDATA[
+                            and i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                    <![CDATA[
+                            and (i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                                 or i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%'))
+                ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        group by s.name
+        order by s.name asc
+        ) obj
+    </select>
+
+    <select id="getModuleStatus" resultType="kr.co.ktds.orchestra.dto.common.ModuleStatus">
+        <![CDATA[
+        -- getModuleStatus (모듈별 테스트 현황)
+        with params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.test', true),
+                        ('status.cancel', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        ),
+        base as
+        (
+        select c_id, c_name, s_id, s_name
+          from (
+                select c.id c_id, c.name c_name
+                  from issue_categories c
+                 where c.project_id = (select project_id from params)  -- 프로젝트아이디
+                   and c.id in (select distinct category_id from issues
+                                 where 1=1
+                                 and project_id = (select project_id from params)
+        ]]>
+        <choose>
+            <when test="testDgr != '' and testDgr != null">
+                <![CDATA[
+                    and tracker_id = #{testDgr}::integer /*테스트차수*/
+                ]]>
+            </when>
+            <otherwise>
+                <![CDATA[
+                    and tracker_id in (select regexp_split_to_table(tracker_id, ',')::integer from params)
+                ]]>
+            </otherwise>
+        </choose>
+
+        <![CDATA[
+                        and category_id is not null)
+               ) c
+         cross join
+               (
+                   select w.status_id s_id, s.name s_name
+                  from (
+                        select w.new_status_id status_id
+                          from workflows w
+                         where 1=1
+         ]]>
+        <choose>
+            <when test="testDgr != '' and testDgr != null">
+                <![CDATA[
+                    and w.tracker_id = #{testDgr}::integer /*테스트차수*/
+                ]]>
+            </when>
+            <otherwise>
+                <![CDATA[
+                    and w.tracker_id in (select regexp_split_to_table(tracker_id, ',')::integer from params)
+                ]]>
+            </otherwise>
+        </choose>
+
+        <![CDATA[
+                         group by w.new_status_id
+                       ) w
+                 inner join issue_statuses s
+                    on (w.status_id = s.id)
+               ) s
+        ),
+        mosu as
+        (
+        select i.category_id, i.status_id,
+               count(i.status_id) as cnt,
+               string_agg(i.id::varchar, ',' order by i.id) as ids
+          from issues i
+         where 1=1
+           and (i.project_id, i.tracker_id)
+            in (select project_id, regexp_split_to_table(tracker_id, ',')::integer from params)
+           and i.status_id != (select status_cancel_id::integer from params)
+           and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+           and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+           and i.assigned_to_id is not null
+		   and i.category_id is not null
+           ]]>
+        <if test="testDgr != '' and testDgr != null">
+            <![CDATA[
+            and i.tracker_id = #{testDgr}::integer /*테스트차수*/
+        ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                    <![CDATA[
+                            and i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                    <![CDATA[
+                            and i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                    <![CDATA[
+                            and (i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                                 or i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%'))
+                ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        <![CDATA[
+         group by i.category_id, i.status_id
+        )
+        select b.c_name as mdl_nm
+             , b.s_name as status
+             , coalesce(m.cnt, 0) as cnt
+             , m.ids
+          from base b
+          left outer join mosu m
+            on (b.s_id = m.status_id
+                and b.c_id = m.category_id)
+         order by b.c_id asc, b.s_id asc
+        ]]>
+    </select>
+
+    <select id="getResultDetail" resultType="kr.co.ktds.orchestra.dto.common.DetailModal">
+        <![CDATA[
+            -- getResultDetail (결과 모달 팝업 - 하단 그리드)
+            with params as
+            (
+            select max(sr.project_id) project_id,
+				   max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+                   max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id,
+				   max(case sr.set_name when 'custom_field_id.test_result' then sr.set_value end) test_result,
+                   max(case sr.set_name when 'custom_field_id.test_id' then sr.set_value end) testcase_id
+              from (
+                    select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                           s.set_name,
+                           r.project_id,
+                           r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                      from or_set_bas s
+                      left outer join or_prj_set_rel r
+                        on (s.id = r.set_id)
+                     where (s.set_name, s.is_project_dependent)
+                        in (('project_id.current', false),
+							('tracker_id.test', true),
+                            ('status.cancel', true),
+							('custom_field_id.test_result', true),
+							('custom_field_id.test_id', true)
+                           )
+                   ) sr
+             where sr.curr_proj_id = sr.project_id
+            )
+            select
+                    (row_number() over()) as no
+                    , issues.id as id
+                    , trackers.name as trk_nm
+                    , custom.tc_id as case_id
+                    , issues.subject
+                    , firstname as assignee
+                    , issues.start_date as start_date
+                    , issues.due_date as end_date
+                    , to_char(issues.closed_on, 'YYYY-MM-DD') as closed_date
+                    , ee.name as status
+            from issues
+              join issue_statuses on issues.status_id = issue_statuses.id
+              join trackers       on issues.tracker_id = trackers.id
+              join users          on issues.assigned_to_id = users.id
+              join issue_categories on issues.category_id = issue_categories.id
+              join ( select cv.customized_id
+                           , max(case when cf.id = (select testcase_id::integer from params) then cv.value end ) as tc_id   -- 테스트케이스 id
+                       from custom_fields cf join custom_values cv on cf.id = cv.custom_field_id
+                      group by cv.customized_id ) custom on issues.id = custom.customized_id
+              left outer join (select v.customized_id, e.name
+                      from custom_fields f
+                      join custom_values v on f.id = v.custom_field_id
+                      join custom_field_enumerations e on f.id = e.custom_field_id
+                        and v.value = cast(e.id as text)
+                     where f.id in (select test_result::integer from params)) ee on issues.id = ee.customized_id
+             where 1=1
+               and issues.project_id = (select project_id::integer from params)			-- 테스트 단계(version)
+               and issues.status_id != (select status_cancel_id::integer from params)
+        ]]>
+        <if test="type != null and type != '' and type == 'acc'">
+            <![CDATA[
+                and issues.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+            ]]>
+        </if>
+        <if test="type != null and type != '' and type == 'week'">
+            <![CDATA[
+                and issues.due_date >= to_date(#{startDate}, 'YYYY-MM-DD') and issues.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+        ]]>
+        </if>
+        <if test="status != null and status != '' and status != 'TOTAL'">
+            <![CDATA[
+                and ee.name = upper(#{status})
+            ]]>
+        </if>
+        <if test="testDgr != null and testDgr != ''">
+            <![CDATA[
+                and trackers.name = #{testDgr} /*테스트차수*/
+            ]]>
+        </if>
+        <if test="module != null and module != ''">
+            <![CDATA[
+                and issue_categories.name = #{module}
+            ]]>
+        </if>
+        <if test="assignee != null and assignee != ''">
+            <![CDATA[
+                and users.firstname = #{assignee}
+            ]]>
+        </if>
+    </select>
+
+    <select id="getProgressDetail" resultType="kr.co.ktds.orchestra.dto.common.DetailModal">
+        <![CDATA[
+            -- getProgressDetail (진척 모달 팝업 - 상단 그리드)
+            with params as
+            (
+            select max(sr.project_id) project_id,
+                   max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id,
+                   max(case sr.set_name when 'status.done' then sr.set_value end) status_done_id,
+                   max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+                   max(case sr.set_name when 'custom_field_id.test_result' then sr.set_value end) test_result,
+                   max(case sr.set_name when 'custom_field_id.test_id' then sr.set_value end) testcase_id
+              from (
+                    select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                           s.set_name,
+                           r.project_id,
+                           r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                      from or_set_bas s
+                      left outer join or_prj_set_rel r
+                        on (s.id = r.set_id)
+                     where (s.set_name, s.is_project_dependent)
+                        in (('project_id.current', false),
+                            ('status.cancel', true),
+                            ('status.done', true),
+                            ('tracker_id.test', true),
+                            ('custom_field_id.test_result', true),
+                            ('custom_field_id.test_id', true)
+                           )
+                   ) sr
+             where sr.curr_proj_id = sr.project_id
+            )
+            select (row_number() over()) as no
+                 , i.id
+                 , t.name as trk_nm
+                 , custom.tc_id as case_id
+                 , i.subject as subject
+                , firstname as assignee
+                , i.start_date
+                , i.due_date as end_date
+                , to_char(i.closed_on, 'YYYY-MM-DD') as closed_date
+                , iss.name as status
+              from issues i
+              join trackers t on t.id = i.tracker_id
+              left outer join issue_categories ic on i.category_id = ic.id
+              left outer join issue_statuses iss on i.status_id = iss.id
+              left outer join users u on i.assigned_to_id = u.id
+              join ( select cv.customized_id
+                          , max(case when cf.id = (select testcase_id::integer from params) then cv.value end ) as tc_id   -- 테스트케이스 id
+                          , max(case when cf.id = (select test_result::integer from params) then cv.value end ) as tc_rslt
+                      from custom_fields cf join custom_values cv on cf.id = cv.custom_field_id
+                     group by cv.customized_id ) custom on i.id = custom.customized_id
+             where 1=1
+               and i.project_id = (select project_id from params)
+                and i.status_id != (select status_cancel_id::integer from params) 			-- '취소' 상태 제외
+        ]]>
+
+        <if test="status == 'plan'">
+            <if test="type == 'acc'">
+                <![CDATA[
+                -- 누적계획
+                and i.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+            <if test="type == 'week'">
+                <![CDATA[
+                -- 주간계획
+                and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+                and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+        </if>
+
+        <if test="status == 'perform'">
+            <if test="type == 'acc'">
+                <![CDATA[
+                -- 누적실적
+                and i.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+                and date_trunc('day', i.closed_on) <= to_date(#{accDate}, 'YYYY-MM-DD')
+                and iss.is_closed = true
+            ]]>
+            </if>
+            <if test="type == 'week'">
+                <![CDATA[
+                -- 주간실적
+                and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+                and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+                and date_trunc('day', i.closed_on) <= to_date(#{endDate}, 'YYYY-MM-DD')
+                and iss.is_closed = true
+            ]]>
+            </if>
+        </if>
+        <if test="status == 'progress'">
+            <if test="type == 'acc'">
+                <![CDATA[
+                -- 누적진행중
+                and i.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+                and (i.closed_on is null
+                     or date_trunc('day', i.closed_on) > to_date(#{accDate}, 'YYYY-MM-DD')
+                     or iss.is_closed = false)
+                and i.due_date >= to_date(#{accDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+            <if test="type == 'week'">
+                <![CDATA[
+                -- 주간진행중
+                and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+                and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+                and (i.closed_on is null
+                     or date_trunc('day', i.closed_on) > to_date(#{endDate}, 'YYYY-MM-DD')
+                     or iss.is_closed = false)
+                and i.due_date >= to_date(#{endDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+        </if>
+        <if test="status == 'delay'">
+            <if test="type == 'acc'">
+                <![CDATA[
+                -- 누적지연
+                and i.start_date <= to_date(#{accDate}, 'YYYY-MM-DD')
+                and (i.closed_on is null
+                     or date_trunc('day', i.closed_on) > to_date(#{accDate}, 'YYYY-MM-DD')
+                     or iss.is_closed = false)
+                and i.due_date < to_date(#{accDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+            <if test="type == 'week'">
+                <![CDATA[
+                -- 주간지연
+                and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+                and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+                and (i.closed_on is null
+                     or date_trunc('day', i.closed_on) > to_date(#{endDate}, 'YYYY-MM-DD')
+                     or iss.is_closed = false)
+                and i.due_date < to_date(#{endDate}, 'YYYY-MM-DD')
+            ]]>
+            </if>
+        </if>
+
+        <if test="status == 'res'">
+            <![CDATA[
+            -- 전체잔여
+            and i.status_id not in(select regexp_split_to_table(status_done_id||','||status_cancel_id, ',')::integer from params)
+            ]]>
+        </if>
+
+        <if test="testDgr != null and testDgr != ''">
+            <![CDATA[
+                and t.name = #{testDgr} /*테스트차수*/
+            ]]>
+        </if>
+        <if test="module != null and module != ''">
+            <![CDATA[
+                and ic.name = #{module}
+            ]]>
+        </if>
+        <if test="assignee != null and assignee != ''">
+            <![CDATA[
+                and u.firstname = #{assignee}
+            ]]>
+        </if>
+    </select>
+
+    <select id="getResultStatus" resultType="kr.co.ktds.orchestra.dto.test.ResultStatus">
+        <![CDATA[
+        -- getResultStatus (모듈별 테스트 결과 현황 : Pass, Fail, Block)
+        with params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id,
+               max(case sr.set_name when 'status.done' then sr.set_value end) status_done_id,
+            max(case sr.set_name when 'custom_field_id.test_result' then sr.set_value end) test_result
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value --regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.test', true),
+                        ('status.cancel', true),
+                        ('status.done', true),
+                        ('custom_field_id.test_result', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        ),
+        base as
+        (
+        select c_id, c_name mdl_nm, cf_id, cfe_id, cfe_name status
+          from (
+                select c.id c_id, c.name c_name
+                  from issue_categories c
+                 where c.project_id = (select project_id from params)  -- 프로젝트아이디
+                   and c.id in (select distinct category_id from issues
+                                 where 1=1
+                                   and project_id = (select project_id from params)
+        ]]>
+        <choose>
+            <when test="testDgr != '' and testDgr != null">
+                <![CDATA[
+                    and tracker_id = #{testDgr}::integer /*테스트차수*/
+                ]]>
+            </when>
+            <otherwise>
+                <![CDATA[
+                    and tracker_id in (select regexp_split_to_table(tracker_id, ',')::integer from params)
+                ]]>
+            </otherwise>
+        </choose>
+
+        <![CDATA[
+                   and category_id is not null)
+               ) c
+         cross join
+               (
+                select cfp.custom_field_id cf_id, cfe.id cfe_id, cfe.name as cfe_name
+                  from custom_fields_projects cfp
+                 inner join custom_field_enumerations cfe
+                    on (cfp.custom_field_id= cfe.custom_field_id)
+                 where cfp.project_id = (select project_id from params)
+                   and cfp.custom_field_id in (select test_result::integer from params) -- 테스트결과
+               ) s
+        ),
+        mosu as
+        (
+        select g.category_id, g.value,
+               count(g.id) cnt,
+               string_agg(g.id::varchar, ',' order by g.id) ids
+          from (
+                select i.category_id,
+                       cv.value,
+                       i.id
+                  from issues i
+                  left outer join custom_values cv
+                    on (i.id = cv.customized_id and cv.custom_field_id in (select test_result::integer from params))
+                 where 1=1
+                   and (i.project_id, i.tracker_id)
+                    in (select project_id, regexp_split_to_table(tracker_id, ',')::integer from params)
+                   and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+                   and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+                   and i.assigned_to_id is not null
+                   and i.category_id is not null
+           ]]>
+        <if test="testDgr != '' and testDgr != null">
+            <![CDATA[
+                and i.tracker_id = #{testDgr}::integer /*테스트차수*/
+            ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                    <![CDATA[
+                        and i.category_id in (select id from issue_categories
+                                               where name like '%'||#{keyword}||'%')
+                    ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                    <![CDATA[
+                        and i.assigned_to_id in (select id from users
+                                                  where firstname like '%'||#{keyword}||'%')
+                    ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                    <![CDATA[
+                        and (i.category_id in (select id from issue_categories
+                                               where name like '%'||#{keyword}||'%')
+                             or i.assigned_to_id in (select id from users
+                                                  where firstname like '%'||#{keyword}||'%'))
+                    ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        <![CDATA[
+               ) g
+         group by g.category_id, g.value
+         having g.value != ''
+        )
+        select b.mdl_nm,
+               b.status,
+               coalesce(m.cnt , 0) as cnt,
+               m.ids
+          from base b
+          left outer join mosu m
+            on (b.c_id = m.category_id and b.cfe_id = m.value::integer)
+         order by b.c_id asc, b.status asc, b.cfe_id
+        ]]>
+    </select>
+
+    <select id="getDailyStatus" resultType="kr.co.ktds.orchestra.dto.common.DailyStatus">
+        <![CDATA[
+        -- getTestDailyStatus (계획 대비 실적 일자별 테스트현황 차트)
+        with recursive copy_t(base_date)
+        as (
+            select to_date(#{startDate}, 'YYYY-MM-DD')
+            union all
+            select base_date + 1 from copy_t
+            where base_date < to_date(#{endDate}, 'YYYY-MM-DD')
+        ),
+        params as
+        (
+        select max(sr.project_id) project_id,
+               max(case sr.set_name when 'tracker_id.test' then sr.set_value end) tracker_id,
+               max(case sr.set_name when 'status.cancel' then sr.set_value end) status_cancel_id
+          from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                       s.set_name,
+                       r.project_id,
+                       r.set_value--regexp_split_to_table(r.set_value, ',')::integer set_value
+                  from or_set_bas s
+                  left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                 where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.test', true),
+                        ('status.cancel', true)
+                       )
+               ) sr
+         where sr.curr_proj_id = sr.project_id
+        ),
+        prgm as (
+            select i.id, i.tracker_id, i.start_date,
+                   case when i.closed_on is not null and s.is_closed
+                        then i.closed_on::date end closed_date
+              from issues i
+             inner join issue_statuses s
+                on (i.status_id = s.id)
+             where 1=1
+               and (i.project_id, i.tracker_id)
+                in (select project_id, regexp_split_to_table(tracker_id, ',')::integer from params)
+               and i.status_id != (select status_cancel_id::integer from params)
+               and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD') --  조회종료일자
+               and i.assigned_to_id is not null
+               and i.category_id is not null
+               ]]>
+        <if test="testDgr != '' and testDgr != null">
+            <![CDATA[
+                and i.tracker_id = #{testDgr}::integer /*테스트차수*/
+            ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region.equalsIgnoreCase("module")'>
+                    <![CDATA[
+                            and i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("assigned")'>
+                    <![CDATA[
+                            and i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region.equalsIgnoreCase("all")'>
+                    <![CDATA[
+                            and (i.category_id in (select id from issue_categories
+						                           where name like '%'||#{keyword}||'%')
+                                 or i.assigned_to_id in (select id from users
+                                                      where firstname like '%'||#{keyword}||'%'))
+                ]]>
+                </when>
+                <otherwise>
+                </otherwise>
+            </choose>
+        </if>
+        <![CDATA[
+        )
+        select g.base_date,
+               count(start_date) plan_cnt,
+               count(case when closed_date <= base_date then 1 end) done_cnt,
+               string_agg(g.id::varchar, ',' order by g.id) plan_list,
+               string_agg(case when closed_date <= base_date
+                               then g.id::varchar end, ',' order by g.id) done_list
+          from (
+                select lft.base_date, rgt.*
+                  from copy_t lft
+                  left outer join prgm rgt
+                    on (rgt.start_date <= lft.base_date)
+               ) g
+         group by g.base_date
+         order by g.base_date
+        ]]>
+    </select>
+
+    <select id="getIssueModuleList" resultType="hashmap">
+        <![CDATA[
+            select c.id, c.name module
+              from issues i
+              left join issue_categories c on i.category_id = c.id
+             where 1=1
+               and i.project_id = 4				        -- 프로젝트
+               and i.tracker_id in (13,18)		        -- 테스트
+               and i.category_id is not null	        -- 업무구분차트니깐 없으면 안돼
+               and i.status_id not in (8)				-- 취소상태아닌거
+               and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+               and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+             group by c.id, c.name
+             order by c.id asc
+        ]]>
+    </select>
+
+    <select id="getModuleStatusData" resultType="hashmap">
+        <![CDATA[
+        select  string_agg(a.id::varchar, ',' order by a.id) ids,
+                a.status_id,
+                a.status_name,
+                count(a.id) cnt
+          from
+            (
+            select  i.id,
+                    t.id tracker_id,
+                    t.name tracker_name,
+                    c.id category_id,
+                    c.name category_name,
+                    s.id status_id,
+                    s.name status_name
+              from issues i
+              left join trackers t on i.tracker_id = t.id
+              left join issue_categories c on i.category_id = c.id
+              left join issue_statuses s on i.status_id = s.id
+             where 1=1
+               and i.project_id = 4				-- 프로젝트
+               and i.tracker_id in (13,18)		-- 테스트
+               and i.category_id is not null	-- 업무구분차트니깐 없으면 안돼
+               and i.status_id not in (8)				-- 취소상태아닌거
+               and i.start_date <= to_date(#{endDate}, 'YYYY-MM-DD')
+               and i.due_date >= to_date(#{startDate}, 'YYYY-MM-DD')
+            ) a
+         where a.category_id = #{moduleId}
+         group by
+                a.status_id,
+                a.status_name
+        ]]>
+    </select>
+</mapper>

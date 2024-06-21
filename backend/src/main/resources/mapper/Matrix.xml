@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.ktds.orchestra.mapper.MatrixMapper">
+    <select id="getMatrixList" resultType="kr.co.ktds.orchestra.dto.matrix.MatrixList">
+        <![CDATA[
+        -- getMatrixList
+        with params as
+        (
+        select max(sr.project_id) project_id
+            , max(case sr.set_name when 'tracker_id.requirement' then sr.set_value end) req -- 요구사항
+            , max(case sr.set_name when 'custom_field_id.req_id' then sr.set_value end) req_id -- 요구사항id
+            , max(case sr.set_name when 'custom_field_id.prg_id' then sr.set_value end) prg_id -- 프로그램id
+            , max(case sr.set_name when 'custom_field_id.test_id' then sr.set_value end) tc_id -- 테스트id
+        from (
+                select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                    s.set_name,
+                    r.project_id,
+                    r.set_value as set_value
+                from or_set_bas s
+                left outer join or_prj_set_rel r
+                    on (s.id = r.set_id)
+                where (s.set_name, s.is_project_dependent)
+                    in (('project_id.current', false),
+                        ('tracker_id.requirement', true),
+                        ('custom_field_id.req_id', true),
+                        ('custom_field_id.prg_id', true),
+                        ('custom_field_id.test_id', true)
+                    )
+            ) sr
+        where sr.curr_proj_id = sr.project_id
+        )
+        select row_number() over() as no,
+        * 
+        from (
+        select 
+            '#'||cast(i.id as varchar)||':'||(case when icr.name is null then '' else '['||icr.name||']' end)||i.subject||'('||coalesce(u.firstname, '')||')'  as requirement
+             , coalesce('#'||cast(ip.id as varchar)||':'||(case when icp.name is null then '' else '['||icp.name||']' end)||ip.subject||'('||coalesce(up.firstname, '')||')', '')  as program
+             , coalesce('#'||cast(it.id as varchar)||':'||(case when ict.name is null then '' else '['||ict.name||']' end)||it.subject||'('||coalesce(ut.firstname, '')||')', '')  as testcase
+             , coalesce('#'||cast(id.id as varchar)||':'||(case when icd.name is null then '' else '['||icd.name||']' end)||id.subject||'('||coalesce(ud.firstname, '')||')', '')  as defect
+            , i.category_id    as module_id
+            , ic.name           as module
+            , i.subject       as req_subject
+            , ip.subject       as pgr_subject
+             , it.subject      as tc_subject
+             , id.subject       as dft_subject
+             , c.value           as req_id
+             , ct.value           as pgr_id
+             , cd.value           as tc_id
+        from issues i
+            left outer join issue_categories icr on icr.id = i.category_id
+            left outer join users u on i.assigned_to_id = u.id
+            left outer join issue_categories ic on ic.id = i.category_id
+            --program
+             left outer join custom_values c on i.id = c.customized_id and c.custom_field_id = (select req_id::integer from params)
+             left outer join custom_values cv on c.value = cv.value and c.customized_id != cv.customized_id
+             left outer join issues ip on ip.id = (case when i.id = cv.customized_id then -1 else cv.customized_id end)
+             left outer join issue_categories icp on icp.id = ip.category_id
+             left outer join users up on ip.assigned_to_id = up.id
+             --testcase
+             left outer join custom_values ct on ip.id = ct.customized_id and ct.custom_field_id = (select prg_id::integer from params)
+             left outer join custom_values cvt on ct.value = cvt.value and ct.customized_id != cvt.customized_id
+             left outer join issues it on it.id = (case when ip.id = cvt.customized_id then -1 else cvt.customized_id end)-- and it.tracker_id in (8, 11)
+             left outer join issue_categories ict on ict.id = it.category_id
+             left outer join users ut on it.assigned_to_id = ut.id
+             --defect
+             left outer join custom_values cd on it.id = cd.customized_id and cd.custom_field_id = (select tc_id::integer from params)
+             left outer join custom_values cvd on cd.value = cvd.value and cd.customized_id != cvd.customized_id and cvd.custom_field_id = (select tc_id::integer from params)
+             left outer join issues id on id.id = (case when it.id = cvd.customized_id then -1 else cvd.customized_id end)
+             left outer join issue_categories icd on icd.id = id.category_id
+             left outer join users ud on id.assigned_to_id = ud.id
+        where 1=1
+            and i.tracker_id = (select req::integer from params)
+            and i.project_id = (select project_id::integer from params)
+        ) r
+        where 1=1
+        ]]>
+        <if test='type != null and type != "all"'>
+            <![CDATA[
+                and r.module ilike '%'||#{type}||'%'
+            ]]>
+        </if>
+        <if test='keyword != null'>
+            <choose>
+                <when test='region2.equalsIgnoreCase("subject")'>
+                    <![CDATA[
+                    and (req_subject ILIKE '%'||#{keyword}||'%' or pgr_subject ILIKE '%'||#{keyword}||'%' or tc_subject ILIKE '%'||#{keyword}||'%' or dft_subject ILIKE '%'||#{keyword}||'%')
+                ]]>
+                </when>
+                <when test='region2.equalsIgnoreCase("reqId")'>
+                    <![CDATA[
+                    and r.req_id ILIKE '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region2.equalsIgnoreCase("pgrId")'>
+                    <![CDATA[
+                    and r.pgr_id ILIKE '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <when test='region2.equalsIgnoreCase("tcId")'>
+                    <![CDATA[
+                    and r.tc_id ILIKE '%'||#{keyword}||'%'
+                ]]>
+                </when>
+                <otherwise></otherwise>
+            </choose>
+        </if>
+        <![CDATA[  
+        order by requirement, program, testcase, defect
+        ]]>
+    </select>
+</mapper>
