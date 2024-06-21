@@ -18,6 +18,7 @@ pipeline {
                 dir('backend') {
                     //sh './mvnw clean install'
                     sh './gradlew  clean install'
+                    chmod +x gradlew
                 }
             }
         }
@@ -36,6 +37,7 @@ pipeline {
                 dir('backend') {
                     //sh './mvnw test'
                     sh './gradlew test'
+                    chmod +x gradlew
                 }
             }
         }
