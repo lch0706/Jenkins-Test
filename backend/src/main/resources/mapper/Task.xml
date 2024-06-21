@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.ktds.orchestra.mapper.TaskMapper">
+
+  <select id="getTaskCount" resultType="hashmap">
+    <![CDATA[
+        -- 이슈
+        select	row_number() over() as no,
+				count(a.issue_done) + count(a.issue_ing) as issue_total,
+                count(a.issue_done) as issue_done,
+                count(a.issue_ing) as issue_ing,
+				count(a.issue_done) + count(a.issue_ing) as risk_total,
+                count(a.risk_done) as risk_done,
+                count(a.risk_ing) as risk_ing,
+				count(a.issue_done) + count(a.issue_ing) as action_total,
+                count(a.action_done) as action_done,
+                count(a.action_ing) as action_ing,
+                string_agg(a.issue_done::varchar, ',' order by a.id) i_done_ids,
+                string_agg(a.issue_ing::varchar, ',' order by a.id) i_ing_ids,
+                string_agg(a.risk_done::varchar, ',' order by a.id) r_done_ids,
+                string_agg(a.risk_ing::varchar, ',' order by a.id) r_ing_ids,
+                string_agg(a.action_done::varchar, ',' order by a.id) a_done_ids,
+                string_agg(a.action_ing::varchar, ',' order by a.id) a_ing_ids
+        from
+        (
+            select  i.id,
+                    case when i.tracker_id = 15 and status_id = 5 then i.id end as issue_done,
+                    case when i.tracker_id = 15 and status_id != 5 then i.id end as issue_ing,
+                    case when i.tracker_id = 16 and status_id = 5 then i.id end as risk_done,
+                    case when i.tracker_id = 16 and status_id != 5 then i.id end as risk_ing,
+                    case when i.tracker_id = 14 and status_id = 5 then i.id end as action_done,
+                    case when i.tracker_id = 14 and status_id != 5 then i.id end as action_ing
+              from issues i
+              order by i.id asc
+        ) a
+        where 1=1
+          and (issue_done is not null
+           or issue_ing is not null
+           or risk_done is not null
+           or risk_ing is not null
+           or action_done is not null
+           or action_ing is not null)
+        ]]>
+  </select>
+
+</mapper>

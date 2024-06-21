@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.ktds.orchestra.mapper.WBSMapper">
+    <select id="getWBSList" resultType="hashmap">
+        with params as
+        (
+            select max(sr.project_id) project_id,
+                   max(case sr.set_name when 'tracker_id.wbs' then sr.set_value end) tracker_id
+              from (
+                    select first_value(r.set_value) over (order by r.project_id)::integer curr_proj_id,
+                           s.set_name,
+                           r.project_id,
+                           r.set_value::integer --regexp_split_to_table(r.set_value, ',')::integer set_value
+                      from or_set_bas s
+                      left outer join or_prj_set_rel r
+                        on (s.id = r.set_id)
+                     where (s.set_name, s.is_project_dependent)
+                        in (('project_id.current', false),
+                            ('tracker_id.wbs', true))
+                    ) sr
+             where sr.curr_proj_id = sr.project_id
+        ),
+        lowdata as (
+            select i.id, i.subject, i.parent_id
+                 , i.subject::text as subjectlist
+                 , max(case when cv.custom_field_id = getFieldID('WBS_ID') then cv.value else null end) as wbs_id
+                 , max(case when cv.custom_field_id = getFieldID('가중치') then cv.value else null end) as weight
+                 , max(i.start_date) as plan_start_date
+                 , max(i.due_date) as plan_end_date
+                 , max(i.done_ratio) as ratio
+                 , (select lastname || ' ' || firstname from users where id = i.assigned_to_id) as assignee
+                 , max(case when cv.custom_field_id = getFieldID('실제시작일') then cv.value else null end) as result_start_date
+                 , max(case when cv.custom_field_id = getFieldID('실제종료일') then cv.value else null end) as result_end_date
+                 , max(case when cv.custom_field_id = getFieldID('실제진척율') then cv.value else null end) as result_progress
+              from issues i, custom_values cv
+             where 1=1
+               and i.tracker_id = (select tracker_id from params)
+               and i.id = cv.customized_id
+               and i.project_id = (select project_id from params) -- project_id 수
+             group by i.id, i.subject , i.parent_id
+        ),
+        wbslv as (
+            select id
+                 , char_length(wbs_id) - char_length(replace(wbs_id, '.', '')) as lv
+              from lowdata
+        )
+        select a.id
+             , b.lv
+             , wbs_id
+             , parent_id
+             , subjectlist
+             , lpad(' ', b.lv*3)||wbs_id || ' ' || subjectlist as subject
+             , weight
+             , plan_start_date
+             , plan_end_date
+             , ratio
+             , assignee
+             , result_start_date
+             , result_end_date
+             , parent_id
+             , result_progress
+          from lowdata a, wbslv b
+         where 1=1
+           and a.id = b.id
+         order by lv desc, wbs_id desc
+    </select>
+    <select id="getHolidate" resultType="date">
+        select holidate from holidaytable
+    </select>
+</mapper>
