@@ -16,7 +16,8 @@ pipeline {
         stage('Build Backend') {
             steps {
                 dir('backend') {
-                    sh './mvnw clean install'
+                    //sh './mvnw clean install'
+                    sh './gradlew  clean install'
                 }
             }
         }
@@ -33,7 +34,8 @@ pipeline {
         stage('Test Backend') {
             steps {
                 dir('backend') {
-                    sh './mvnw test'
+                    //sh './mvnw test'
+                    sh './gradlew test'
                 }
             }
         }
