@@ -17,7 +17,7 @@ pipeline {
             steps {
                 dir('backend') {
                     //sh './mvnw clean install'
-                    sh './gradlew  clean install'
+                    sh './gradlew  clean build'
                 }
             }
         }
