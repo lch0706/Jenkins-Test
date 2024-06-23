@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64" // 수동으로 설치된 JDK 경로
+        JAVA_HOME = "/usr/lib/jvm/java-17-openjdk-amd64" // 수동으로 설치된 JDK 경로
         PATH = "${env.JAVA_HOME}/bin:${env.PATH}"
     }
 
