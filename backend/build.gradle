@@ -39,7 +39,7 @@ tasks.withType(JavaCompile) {
 }
 
 bootJar {
-    mainClassName = 'com.example.MainApplication'
+    mainClassName = 'kr.co.ktds.orchestra.OrchestraApplication'
 }
 
 test {
