@@ -8,7 +8,7 @@ echo "Starting deployment..."
 
 # Define variables
 APP_NAME="MyApplication"
-DEPLOY_DIR="/home/juhan/myApp"
+DEPLOY_DIR="/home/jenkins/myApp"
 REPO_URL="https://github.com/lch0706/Jenkins-Test.git"
 BRANCH="main"
 
