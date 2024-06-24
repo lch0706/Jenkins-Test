@@ -24,7 +24,7 @@ pipeline {
                     sh 'chmod +x gradlew'
                     sh '''
                         export GRADLE_OPTS="-Dorg.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64"
-                        ./gradlew clean build
+                        ./gradlew clean build --info
                     '''
                 }
             }
