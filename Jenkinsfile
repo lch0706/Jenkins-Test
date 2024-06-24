@@ -1,6 +1,7 @@
 pipeline {
     agent any
-     tools {
+
+    tools {
         jdk 'JDK 17'
         gradle 'Gradle 7'
     }
@@ -20,11 +21,11 @@ pipeline {
         stage('Build Backend') {
             steps {
                 dir('backend') {
-                    //sh './mvnw clean install'
                     sh 'chmod +x gradlew'
                     sh '''
-                    export GRADLE_OPTS="-Dorg.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64"
-                    sh './gradlew  clean build'
+                        export GRADLE_OPTS="-Dorg.gradle.java.home=/usr/lib/jvm/java-17-openjdk-amd64"
+                        ./gradlew clean build
+                    '''
                 }
             }
         }
@@ -41,7 +42,6 @@ pipeline {
         stage('Test Backend') {
             steps {
                 dir('backend') {
-                    //sh './mvnw test'
                     sh './gradlew test'
                 }
             }
