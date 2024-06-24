@@ -10,9 +10,6 @@ version = '4.1.1-SNAPSHOT'
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
-        tasks.withType(JavaCompile) {
-        options.release = 17
-    }
 }
 
 repositories {
@@ -34,6 +31,10 @@ dependencies {
 
     implementation 'org.bgee.log4jdbc-log4j2:log4jdbc-log4j2-jdbc4.1:1.16'
     implementation 'com.googlecode.json-simple:json-simple:1.1'
+}
+
+tasks.withType(JavaCompile) {
+    options.release = 17
 }
 
 test {
