@@ -1,5 +1,9 @@
 pipeline {
     agent any
+     tools {
+        jdk 'JDK 17'
+        gradle 'Gradle 7'
+    }
 
     environment {
         JAVA_HOME = "/usr/lib/jvm/java-17-openjdk-amd64" // 수동으로 설치된 JDK 경로
